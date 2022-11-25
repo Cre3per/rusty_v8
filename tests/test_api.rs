@@ -966,6 +966,7 @@ fn isolate_termination_methods() {
   static CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
   extern "C" fn callback(
     _isolate: &mut v8::Isolate,
+    _scope: &mut v8::CallbackScope,
     data: *mut std::ffi::c_void,
   ) {
     assert_eq!(data, std::ptr::null_mut());
@@ -994,6 +995,7 @@ fn thread_safe_handle_drop_after_isolate() {
   static CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
   extern "C" fn callback(
     _isolate: &mut v8::Isolate,
+    _scope: &mut v8::CallbackScope,
     data: *mut std::ffi::c_void,
   ) {
     assert_eq!(data, std::ptr::null_mut());
@@ -1055,6 +1057,7 @@ fn request_interrupt_small_scripts() {
     static CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
     extern "C" fn callback(
       _isolate: &mut v8::Isolate,
+      _scope: &mut v8::CallbackScope,
       data: *mut std::ffi::c_void,
     ) {
       assert_eq!(data, std::ptr::null_mut());

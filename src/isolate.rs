@@ -290,7 +290,13 @@ where
 pub type HostCreateShadowRealmContextCallback =
   for<'s> fn(scope: &mut HandleScope<'s>) -> Option<Local<'s, Context>>;
 
-pub type InterruptCallback =
+pub type ScopedInterruptCallback = extern "C" fn(
+  isolate: &mut Isolate,
+  scope: &mut CallbackScope,
+  data: *mut c_void,
+);
+
+type InterruptCallback =
   extern "C" fn(isolate: &mut Isolate, data: *mut c_void);
 
 pub type NearHeapLimitCallback = extern "C" fn(
@@ -417,6 +423,8 @@ extern "C" {
     callback: InterruptCallback,
     data: *mut c_void,
   );
+  //  TODO: sort or move. scope.rs also has this declaration.
+  fn v8__Isolate__GetCurrentContext(isolate: *mut Isolate) -> *const Context;
   fn v8__Isolate__TerminateExecution(isolate: *const Isolate);
   fn v8__Isolate__IsExecutionTerminating(isolate: *const Isolate) -> bool;
   fn v8__Isolate__CancelTerminateExecution(isolate: *const Isolate);
@@ -1349,12 +1357,13 @@ impl IsolateHandle {
     }
   }
 
-  /// Request V8 to interrupt long running JavaScript code and invoke
-  /// the given |callback| passing the given |data| to it. After |callback|
-  /// returns control will be returned to the JavaScript code.
-  /// There may be a number of interrupt requests in flight.
-  /// Can be called from another thread without acquiring a |Locker|.
-  /// Registered |callback| must not reenter interrupted Isolate.
+  /// Request V8 to interrupt long running JavaScript code and invoke the given
+  /// |callback| passing the given |data| to it. |callback| is not invoked
+  /// immediately. It is the caller's responsibility to keep |data| alive.
+  /// After |callback| returns control will be returned to the JavaScript code.
+  /// There may be a number of interrupt requests in flight.  Can be called from
+  /// another thread without acquiring a |Locker|.  Registered |callback| must
+  /// not reenter interrupted Isolate.
   ///
   /// Returns false if Isolate was already destroyed.
   // Clippy warns that this method is dereferencing a raw pointer, but it is
@@ -1363,14 +1372,40 @@ impl IsolateHandle {
   #[inline(always)]
   pub fn request_interrupt(
     &self,
-    callback: InterruptCallback,
+    // TODO: not mut
+    mut callback: ScopedInterruptCallback,
+    // TODO: forward data to callback
     data: *mut c_void,
   ) -> bool {
+    extern "C" fn trampoline(isolate: &mut Isolate, data: *mut c_void) {
+      let p = data as *mut ScopedInterruptCallback;
+      // SAFETY: We're passing the callback as data
+      let callback = unsafe { *p };
+
+      // TODO: Write a rust function for GetCurrentContext, because scope.rs also uses the raw call.
+      let context =
+        unsafe { v8__Isolate__GetCurrentContext(isolate as *mut Isolate) };
+      // TODO: SAFETY
+      let local_context = unsafe { Local::from_raw(context) }.unwrap();
+      let scope = unsafe { &mut CallbackScope::new(local_context) };
+
+      callback(isolate, scope, data)
+    }
+
     let _lock = self.0.isolate_mutex.lock().unwrap();
     if self.0.isolate.is_null() {
       false
     } else {
-      unsafe { v8__Isolate__RequestInterrupt(self.0.isolate, callback, data) };
+      // TODO: original_data
+      let original_callback =
+        &mut callback as *mut ScopedInterruptCallback as *mut c_void;
+      unsafe {
+        v8__Isolate__RequestInterrupt(
+          self.0.isolate,
+          trampoline,
+          original_callback,
+        )
+      };
       true
     }
   }
